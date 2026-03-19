@@ -1,7 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader2 } from 'lucide-react';
-import { GoogleGenAI } from '@google/genai';
-import kbData from './data/kb.json';
 
 export default function App() {
   const [messages, setMessages] = useState([
@@ -40,34 +38,20 @@ export default function App() {
       parts: [{ text: userText }]
     });
 
-    // The System Instruction stringifies the KB data and provides strict guardrails
-    const systemInstruction = `
-      You are a customer support routing assistant for DelyvaNow.
-      Your ONLY task is to direct the user to ALL relevant articles from the provided JSON knowledge base.
-      
-      RULES:
-      1. DO NOT answer the user's question directly.
-      2. INSTEAD, find ALL matching articles in the knowledge base and reply ONLY with a short, polite message containing the link(s) to those articles.
-      3. If there are multiple relevant articles, list ALL of them as bullet points.
-      4. Format the links strictly in Markdown like this: - [Article Title](URL)
-      5. If the answer cannot be found in the knowledge base, politely inform them that you couldn't find a matching article and say "please contact our live chat team".
-      6. DO NOT make up URLs, hallucinate articles, or use external links outside the provided JSON.
-
-      KNOWLEDGE BASE DATA:
-      ${JSON.stringify(kbData)}
-    `;
-
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: geminiHistory as any,
-        config: {
-          systemInstruction: systemInstruction,
-        }
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ history: geminiHistory })
       });
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || "Server responded with an error");
+      }
 
-      const botReply = response.text;
+      const botReply = data.text;
 
       if (botReply) {
         setMessages(prev => [...prev, { role: 'model', text: botReply }]);
