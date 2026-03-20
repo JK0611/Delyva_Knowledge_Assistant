@@ -83,7 +83,6 @@ ${JSON.stringify(topResults)}
   }
 });
 
-
 app.listen(port, () => {
   console.log(`Backend server running on http://localhost:${port}`);
 });
