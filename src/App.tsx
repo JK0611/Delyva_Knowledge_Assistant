@@ -58,24 +58,39 @@ export default function App() {
 
       setIsLoading(false); // connected to stream, stop spinner
 
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("Stream not supported");
+      const contentType = res.headers.get('content-type') || '';
       
-      const decoder = new TextDecoder();
-      let botReply = '';
-
-      setMessages(prev => [...prev, { role: 'model', text: '' }]);
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        botReply += decoder.decode(value, { stream: true });
+      if (contentType.includes('application/json')) {
+        // Fallback for older backend that doesn't stream
+        const data = await res.json();
+        const botReply = data.text;
         
-        setMessages(prev => {
-          const newMessages = [...prev];
-          newMessages[newMessages.length - 1].text = botReply;
-          return newMessages;
-        });
+        if (botReply) {
+          setMessages(prev => [...prev, { role: 'model', text: botReply }]);
+        } else {
+          throw new Error("Received an empty or malformed response from the AI.");
+        }
+      } else {
+        // New streaming backend
+        const reader = res.body?.getReader();
+        if (!reader) throw new Error("Stream not supported");
+        
+        const decoder = new TextDecoder();
+        let botReply = '';
+
+        setMessages(prev => [...prev, { role: 'model', text: '' }]);
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          botReply += decoder.decode(value, { stream: true });
+          
+          setMessages(prev => {
+            const newMessages = [...prev];
+            newMessages[newMessages.length - 1].text = botReply;
+            return newMessages;
+          });
+        }
       }
 
     } catch (err) {
