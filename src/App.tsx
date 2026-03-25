@@ -47,27 +47,54 @@ export default function App() {
         body: JSON.stringify({ history: geminiHistory })
       });
       
-      const data = await res.json();
-      
       if (!res.ok) {
-        throw new Error(data.error || "Server responded with an error");
+        try {
+          const errData = await res.json();
+          throw new Error(errData.error || "Server responded with an error");
+        } catch {
+          throw new Error(`Server responded with an error: ${res.status}`);
+        }
       }
 
-      const botReply = data.text;
+      setIsLoading(false); // connected to stream, stop spinner
 
-      if (botReply) {
-        setMessages(prev => [...prev, { role: 'model', text: botReply }]);
-      } else {
-        throw new Error("Received an empty or malformed response from the AI.");
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("Stream not supported");
+      
+      const decoder = new TextDecoder();
+      let botReply = '';
+
+      setMessages(prev => [...prev, { role: 'model', text: '' }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        botReply += decoder.decode(value, { stream: true });
+        
+        setMessages(prev => {
+          const newMessages = [...prev];
+          newMessages[newMessages.length - 1].text = botReply;
+          return newMessages;
+        });
       }
 
     } catch (err) {
       console.error(err);
-      setMessages(prev => [...prev, { 
-        role: 'model', 
-        text: "I'm sorry, I encountered an error while trying to generate a response. Please try again later.",
-        isError: true
-      } as any]);
+      setMessages(prev => {
+        const newMessages = [...prev];
+        const lastMsg = newMessages[newMessages.length - 1];
+        if (lastMsg && lastMsg.role === 'model' && lastMsg.text === '') {
+           lastMsg.text = "I'm sorry, I encountered an error while trying to generate a response. Please try again later.";
+           (lastMsg as any).isError = true;
+           return newMessages;
+        } else {
+           return [...newMessages, { 
+            role: 'model', 
+            text: "I'm sorry, I encountered an error while trying to generate a response. Please try again later.",
+            isError: true
+          } as any];
+        }
+      });
     } finally {
       setIsLoading(false);
     }

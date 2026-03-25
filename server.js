@@ -70,16 +70,28 @@ ${JSON.stringify(topResults)}
       history[history.length - 1].parts[0].text = systemInstruction + '\n\nUSER QUESTION:\n' + history[history.length - 1].parts[0].text;
     }
 
-    // Call Gemini 3.1 Flash Lite
-    const response = await ai.models.generateContent({
+    // Call Gemini 3.1 Flash Lite with Streaming
+    const stream = await ai.models.generateContentStream({
       model: 'gemini-3.1-flash-lite-preview',
       contents: history
     });
 
-    res.json({ text: response.text });
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    for await (const chunk of stream) {
+      if (chunk.text) {
+        res.write(chunk.text);
+      }
+    }
+    res.end();
   } catch (error) {
     console.error('Error calling Gemini API:', error);
-    res.status(500).json({ error: 'Failed to generate response' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to generate response' });
+    } else {
+      res.end();
+    }
   }
 });
 

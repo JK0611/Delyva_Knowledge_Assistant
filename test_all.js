@@ -35,16 +35,20 @@ async function runTests() {
                 })
             });
 
-            const data = await res.json();
-
-            if (data.error) {
-                console.error(`[FAIL] Q: "${question}" -> API Error: ${data.error}`);
+            if (!res.ok) {
+                const errText = await res.text();
+                console.error(`[FAIL] Q: "${question}" -> API Error: ${errText}`);
                 failed++;
-            } else if (data.text.includes(expectedUrl) || data.text.includes('delyva.com/my/blog/kb/')) {
+                continue;
+            }
+
+            const text = await res.text();
+
+            if (text.includes(expectedUrl) || text.includes('delyva.com/my/blog/kb/')) {
                 console.log(`[PASS] Q: "${question}" -> Bot successfully recommended an article.`);
                 passed++;
             } else {
-                console.warn(`[WARN] Q: "${question}" -> Bot replied, but didn't include the exact expected URL. Reply: ${data.text.trim().substring(0, 60)}...`);
+                console.warn(`[WARN] Q: "${question}" -> Bot replied, but didn't include the exact expected URL. Reply: ${text.trim().substring(0, 60)}...`);
                 // Counting as warn/pass since generative AI might format URLs slightly differently or find a closely related one.
                 passed++;
             }
