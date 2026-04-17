@@ -1,9 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader2, Sparkles, ThumbsUp, ThumbsDown, ChevronUp } from 'lucide-react';
-import { GoogleGenAI } from '@google/genai';
 import { Scrollbars } from 'react-custom-scrollbars-2';
-import kbData from './data/kb.json';
-import Fuse from 'fuse.js';
 
 export default function App() {
   const [messages, setMessages] = useState<{role: string, text: string, isError?: boolean, feedback?: 'up' | 'down', generationTime?: string}>([
@@ -57,78 +54,68 @@ export default function App() {
     return () => view.removeEventListener('wheel', handleWheel);
   }, []);
 
-  // Call Gemini API
+  // Call Backend RAG API natively
   const generateResponse = async (userText: string) => {
     setIsLoading(true);
 
-    // Prepare message history for Gemini
-    const geminiHistory = messages.map(msg => ({
+    const backendHistory = messages.map(msg => ({
       role: msg.role === 'model' ? 'model' : 'user',
       parts: [{ text: msg.text }]
     }));
-
-    // Add the new user message
-    geminiHistory.push({
+    
+    backendHistory.push({
       role: 'user',
       parts: [{ text: userText }]
     });
 
-    // Setup Fuse.js for fuzzy search (RAG mechanism)
-    const fuse = new Fuse(kbData, {
-      keys: [
-        { name: 'title', weight: 0.7 },
-        { name: 'content', weight: 0.3 }
-      ],
-      threshold: 0.6,
-      ignoreLocation: true,
-      findAllMatches: true,
-      includeScore: true,
-    });
-
-    // Search the KB for the top relevant articles
-    const searchResults = fuse.search(userText);
-    const topResults = searchResults.slice(0, 5).map(result => result.item);
-
-    // The System Instruction stringifies the top results and provides strict guardrails
-    const systemInstruction = `
-      You are a customer support routing assistant for DelyvaNow.
-      Your ONLY task is to direct the user to ALL relevant articles from the provided JSON knowledge base.
-      
-      RULES:
-      1. DO NOT answer the user's question directly.
-      2. INSTEAD, find ALL matching articles in the knowledge base and reply ONLY with a short, polite message containing the link(s) to those articles.
-      3. If there are multiple relevant articles, list ALL of them as a numbered list.
-      4. Format the links strictly in Markdown like this: 1. [Article Title](URL)
-      5. If the answer cannot be found in the knowledge base, politely inform them that you couldn't find a matching article and say "please contact our live chat team".
-      6. DO NOT make up URLs, hallucinate articles, or use external links outside the provided JSON.
-
-      KNOWLEDGE BASE DATA:
-      ${JSON.stringify(topResults)}
-    `;
-
     try {
-      const modelMap: Record<string, string> = {
-        "Gemma 4 31B": "gemma-4-31b-it",
-        "Gemini 3.1 Flash Lite": "gemini-3.1-flash-lite-preview",
-        "Gemini 2.5 Flash": "gemini-2.5-flash"
-      };
-
       const startTime = performance.now();
-      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: modelMap[selectedModel] || 'gemini-2.5-flash',
-        contents: geminiHistory as any,
-        config: {
-          systemInstruction: systemInstruction,
-        }
+      
+      const response = await fetch('http://localhost:3001/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          history: backendHistory,
+          selectedModel: selectedModel,
+          inputValue: userText
+        })
       });
+
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status}`);
+      }
+      
+      // Real-time Text Streaming parser
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder("utf-8");
+      
+      let botReply = "";
+      setMessages(prev => [...prev, { role: 'model', text: "" }]);
+
+      while (reader) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        
+        botReply += decoder.decode(value, { stream: true });
+        
+        setMessages(prev => {
+          const newArray = [...prev];
+          newArray[newArray.length - 1] = { role: 'model', text: botReply };
+          return newArray;
+        });
+      }
+
       const endTime = performance.now();
       const elapsedTime = ((endTime - startTime) / 1000).toFixed(1);
 
-      const botReply = response.text;
-
       if (botReply) {
-        setMessages(prev => [...prev, { role: 'model', text: botReply, generationTime: elapsedTime }]);
+        setMessages(prev => {
+          const newArray = [...prev];
+          newArray[newArray.length - 1] = { role: 'model', text: botReply, generationTime: elapsedTime };
+          return newArray;
+        });
       } else {
         throw new Error("Received an empty or malformed response from the AI.");
       }
@@ -143,11 +130,16 @@ export default function App() {
         errorMessage = "You've hit the limit or the model is overloaded! Please switch to another model.";
       }
 
-      setMessages(prev => [...prev, { 
-        role: 'model', 
-        text: errorMessage,
-        isError: true
-      } as any]);
+      setMessages(prev => {
+        // Find if we generated an empty string we should overwrite, otherwise append
+        const lastMsg = prev[prev.length - 1];
+        if (lastMsg && lastMsg.role === 'model' && lastMsg.text === "") {
+           const newArray = [...prev];
+           newArray[newArray.length - 1] = { role: 'model', text: errorMessage, isError: true } as any;
+           return newArray;
+        }
+        return [...prev, { role: 'model', text: errorMessage, isError: true } as any];
+      });
     } finally {
       setIsLoading(false);
     }

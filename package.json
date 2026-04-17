@@ -10,7 +10,7 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "start": "tsx server.js",
-    "dev:all": "concurrently \"npm run dev\" \"npm run start\""
+    "dev:all": "concurrently \"vite --port=3000 --host=0.0.0.0\" \"tsx server.js\""
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
