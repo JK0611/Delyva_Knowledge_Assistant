@@ -194,7 +194,8 @@ ${JSON.stringify(bestDocs)}`;
 
     // Ensure we handle different model identifiers gracefully
     const mappedModel = selectedModel === "Gemma 4 31B" ? "gemma-4-31b-it" :
-                        selectedModel === "Gemini 3.1 Flash Lite" ? "gemini-2.5-flash" :
+                        selectedModel === "Gemini 3.1 Flash Lite" ? "gemini-3.1-flash-lite-preview" :
+                        selectedModel === "Gemini 2.5 Flash Lite" ? "gemini-2.5-flash" :
                         selectedModel || "gemini-2.5-flash";
 
     console.log(`Sending final prompt to: ${mappedModel} with ${bestDocs.length} perfect documents...`);

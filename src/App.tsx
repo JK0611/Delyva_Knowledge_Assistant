@@ -14,11 +14,25 @@ export default function App() {
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("Gemini 3.1 Flash Lite");
+  const [selectedModel, setSelectedModel] = useState("Gemini 2.5 Flash Lite");
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const faqScrollbarRef = useRef<Scrollbars>(null);
+  const modelMenuRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (modelMenuRef.current && !modelMenuRef.current.contains(event.target as Node)) {
+        setIsModelMenuOpen(false);
+      }
+    };
+    if (isModelMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isModelMenuOpen]);
   const suggestions = [
     "What if my courier did not pick up?",
     "What is Delyva?",
@@ -398,37 +412,47 @@ export default function App() {
                 rows={1}
               />
               
-              {/* Model Menu Popup */}
-              {isModelMenuOpen && (
-                <div className="absolute bottom-full right-12 mb-2 w-64 bg-[#6b6b6b] text-white rounded-2xl shadow-xl z-50 animate-in fade-in slide-in-from-bottom-2 duration-200 p-2">
-                  <div className="flex flex-col gap-1">
-                    <button 
-                      type="button"
-                      onClick={() => { setSelectedModel("Gemini 3.1 Flash Lite"); setIsModelMenuOpen(false); }}
-                      className={`flex flex-col items-start px-3 py-2.5 transition-colors text-left rounded-xl ${selectedModel === "Gemini 3.1 Flash Lite" ? "bg-black/20" : "hover:bg-white/10"}`}
-                    >
-                      <span className="text-[15px] font-medium leading-tight">Gemini 3.1 Flash Lite</span>
-                      <span className="text-[13px] text-white/70 leading-tight mt-0.5">Recommended</span>
-                    </button>
-                    <button 
-                      type="button"
-                      onClick={() => { setSelectedModel("Gemma 4 31B"); setIsModelMenuOpen(false); }}
-                      className={`flex flex-col items-start px-3 py-2.5 transition-colors text-left rounded-xl ${selectedModel === "Gemma 4 31B" ? "bg-black/20" : "hover:bg-white/10"}`}
-                    >
-                      <span className="text-[15px] font-medium leading-tight">Gemma 4 31B</span>
-                      <span className="text-[13px] text-white/70 leading-tight mt-0.5">Second option</span>
-                    </button>
+              {/* Model Menu Popup within its own relative ref container */}
+              <div ref={modelMenuRef} className="relative flex items-center h-full">
+                {isModelMenuOpen && (
+                  <div className="absolute bottom-full right-0 mb-2 w-64 bg-[#6b6b6b] text-white rounded-2xl shadow-xl z-50 animate-in fade-in slide-in-from-bottom-2 duration-200 p-2">
+                    <div className="flex flex-col gap-1">
+                      <button 
+                        type="button"
+                        onClick={() => { setSelectedModel("Gemini 2.5 Flash Lite"); setIsModelMenuOpen(false); }}
+                        className={`flex flex-col items-start px-3 py-2.5 transition-colors text-left rounded-xl ${selectedModel === "Gemini 2.5 Flash Lite" ? "bg-black/20" : "hover:bg-white/10"}`}
+                      >
+                        <span className="text-[15px] font-medium leading-tight">Gemini 2.5 Flash Lite</span>
+                        <span className="text-[13px] text-white/70 leading-tight mt-0.5">Recommended</span>
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => { setSelectedModel("Gemini 3.1 Flash Lite"); setIsModelMenuOpen(false); }}
+                        className={`flex flex-col items-start px-3 py-2.5 transition-colors text-left rounded-xl ${selectedModel === "Gemini 3.1 Flash Lite" ? "bg-black/20" : "hover:bg-white/10"}`}
+                      >
+                        <span className="text-[15px] font-medium leading-tight">Gemini 3.1 Flash Lite</span>
+                        <span className="text-[13px] text-white/70 leading-tight mt-0.5">Second option</span>
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => { setSelectedModel("Gemma 4 31B"); setIsModelMenuOpen(false); }}
+                        className={`flex flex-col items-start px-3 py-2.5 transition-colors text-left rounded-xl ${selectedModel === "Gemma 4 31B" ? "bg-black/20" : "hover:bg-white/10"}`}
+                      >
+                        <span className="text-[15px] font-medium leading-tight">Gemma 4 31B</span>
+                        <span className="text-[13px] text-white/70 leading-tight mt-0.5">Third option</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              <button 
-                type="button" 
-                onClick={() => setIsModelMenuOpen(!isModelMenuOpen)}
-                className="w-9 h-9 mb-0.5 flex items-center justify-center text-slate-500 hover:text-blue-600 hover:bg-blue-50/50 rounded-full transition-colors shrink-0"
-              >
-                <ChevronUp size={20} />
-              </button>
+                <button 
+                  type="button" 
+                  onClick={() => setIsModelMenuOpen(!isModelMenuOpen)}
+                  className="w-9 h-9 mb-0.5 flex items-center justify-center text-slate-500 hover:text-blue-600 hover:bg-blue-50/50 rounded-full transition-colors shrink-0"
+                >
+                  <ChevronUp size={20} />
+                </button>
+              </div>
               <button
                 type="submit"
                 disabled={!inputValue.trim() || isLoading}
