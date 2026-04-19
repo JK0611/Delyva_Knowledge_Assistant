@@ -243,8 +243,8 @@ export default function App() {
 
   // --- UI: Chat Screen ---
   return (
-    <div className="min-h-screen bg-[#F3F4F6] flex items-center justify-center p-4 sm:p-6 font-sans">
-      <div className="w-full max-w-4xl bg-white rounded-[2rem] shadow-[0_20px_60px_-15px_rgba(0,0,0,0.1)] flex flex-col overflow-hidden border border-slate-200/60 relative" style={{ height: '85vh' }}>
+    <div className="min-h-[100dvh] bg-[#F3F4F6] sm:p-6 font-sans flex sm:items-center sm:justify-center">
+      <div className="w-full max-w-4xl h-[100dvh] sm:h-[85vh] bg-white sm:rounded-[2rem] shadow-none sm:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.1)] flex flex-col overflow-hidden border-none sm:border border-slate-200/60 relative">
         
         {/* Header */}
         <div className="bg-gradient-to-r from-blue-700 to-blue-500 text-white p-3 sm:p-4 flex items-center justify-between shrink-0 shadow-sm z-10 relative overflow-hidden">
@@ -368,7 +368,7 @@ export default function App() {
         <div className="absolute bottom-0 left-0 right-0 shrink-0 z-20 pointer-events-none">
           
           {/* Floating FAQ */}
-          <div className="w-[calc(100%-20px)] px-5 sm:px-8 pb-0 pt-2 pointer-events-auto translate-y-[5px] [mask-image:linear-gradient(to_right,black_85%,transparent_100%)] [-webkit-mask-image:linear-gradient(to_right,black_85%,transparent_100%)]">
+          <div className="w-full px-4 sm:px-8 pb-0 pt-2 pointer-events-auto translate-y-[5px] [mask-image:linear-gradient(to_right,black_85%,transparent_100%)] [-webkit-mask-image:linear-gradient(to_right,black_85%,transparent_100%)]">
             <Scrollbars
               ref={faqScrollbarRef}
               autoHide
