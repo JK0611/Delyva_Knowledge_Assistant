@@ -37,10 +37,10 @@ export default function App() {
   };
 
   const getOrSetSessionId = () => {
-    let sid = localStorage.getItem('chat_session_id');
+    let sid = sessionStorage.getItem('chat_session_id');
     if (!sid) {
       sid = crypto.randomUUID();
-      localStorage.setItem('chat_session_id', sid);
+      sessionStorage.setItem('chat_session_id', sid);
     }
     return sid;
   };
