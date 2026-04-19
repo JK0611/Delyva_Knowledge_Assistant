@@ -43,28 +43,36 @@ try {
 }
 
 // 2. Load Vector Store
-let vectorStore = [];
-try {
-  if (dbAdmin) {
-    const snap = await dbAdmin.collection('vector_store').get();
-    if (!snap.empty) {
-      vectorStore = snap.docs.map(d => d.data());
-      console.log(`Loaded ${vectorStore.length} dense vectors from Firebase.`);
+let vectorStoreCache = null;
+async function getVectorStore() {
+  if (vectorStoreCache) return vectorStoreCache;
+  
+  let vectorStore = [];
+  try {
+    if (dbAdmin) {
+      const snap = await dbAdmin.collection('vector_store').get();
+      if (!snap.empty) {
+        vectorStore = snap.docs.map(d => d.data());
+        console.log(`Loaded ${vectorStore.length} dense vectors from Firebase.`);
+      }
+    }
+  } catch (e) {
+    console.warn("Failed to load vectors from Firebase. Trying local...");
+  }
+
+  if (vectorStore.length === 0) {
+    try {
+      vectorStore = JSON.parse(
+        fs.readFileSync(path.resolve('./src/data/vector_store.json'), 'utf-8')
+      );
+      console.log(`Loaded ${vectorStore.length} dense vectors into memory via local file.`);
+    } catch (e) {
+      console.warn("Vector store not found yet. It might still be building...");
     }
   }
-} catch (e) {
-  console.warn("Failed to load vectors from Firebase. Trying local...");
-}
-
-if (vectorStore.length === 0) {
-  try {
-    vectorStore = JSON.parse(
-      fs.readFileSync(path.resolve('./src/data/vector_store.json'), 'utf-8')
-    );
-    console.log(`Loaded ${vectorStore.length} dense vectors into memory via local file.`);
-  } catch (e) {
-    console.warn("Vector store not found yet. It might still be building...");
-  }
+  
+  vectorStoreCache = vectorStore;
+  return vectorStoreCache;
 }
 
 // Setup Sparse Keyword Matcher (Fuse.js)
@@ -103,7 +111,9 @@ app.post('/api/chat', async (req, res) => {
     // PHASE 2A: DENSE SEARCH (Semantic Vector Matching)
     // ----------------------------------------------------
     let denseResults = [];
-    if (vectorStore.length > 0) {
+    const vStore = await getVectorStore();
+    
+    if (vStore.length > 0) {
       try {
         const embedRes = await ai.models.embedContent({
           model: 'gemini-embedding-2-preview',
@@ -112,7 +122,7 @@ app.post('/api/chat', async (req, res) => {
         });
         const queryVector = embedRes.embeddings[0].values;
         
-        denseResults = vectorStore.map(v => ({
+        denseResults = vStore.map(v => ({
           item: v.parentDocument,
           score: cosineSimilarity(queryVector, v.embedding) // 1.0 is a perfect match
         }))
