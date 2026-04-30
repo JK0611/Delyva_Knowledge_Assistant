@@ -19,8 +19,12 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 let langfuse = null;
 try {
   if (process.env.LANGFUSE_SECRET_KEY && process.env.LANGFUSE_PUBLIC_KEY) {
-    langfuse = new Langfuse();
-    console.log("Langfuse observability initialized.");
+    langfuse = new Langfuse({
+      secretKey: process.env.LANGFUSE_SECRET_KEY,
+      publicKey: process.env.LANGFUSE_PUBLIC_KEY,
+      baseUrl: process.env.LANGFUSE_BASE_URL || process.env.LANGFUSE_BASEURL || process.env.LANGFUSE_HOST || "https://cloud.langfuse.com"
+    });
+    console.log("Langfuse observability initialized at", langfuse.baseUrl);
   } else {
     console.warn("No Langfuse keys found. Observability disabled.");
   }
