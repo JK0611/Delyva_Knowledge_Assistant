@@ -334,11 +334,18 @@ ${JSON.stringify(bestDocs)}`;
 // Health check endpoint (used by self-ping to prevent Render sleep)
 app.get('/health', (req, res) => res.send('OK'));
 
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(port, () => {
-    console.log(`Enterprise RAG Backend running on http://localhost:${port}`);
-  });
-}
+// Serve the static React frontend in production
+app.use(express.static(path.join(process.cwd(), 'dist')));
+
+// Fallback all other routes to React Router (if you add routing later)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(process.cwd(), 'dist', 'index.html'));
+});
+
+// Always start the server (Render requires binding to a port)
+app.listen(port, () => {
+  console.log(`Enterprise RAG Backend running on port ${port}`);
+});
 
 // Self-ping to prevent Render free tier from sleeping (spins down after 15 min inactivity)
 if (process.env.RENDER_EXTERNAL_URL) {
