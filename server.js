@@ -331,10 +331,24 @@ ${JSON.stringify(bestDocs)}`;
 });
 
 
+// Health check endpoint (used by self-ping to prevent Render sleep)
+app.get('/health', (req, res) => res.send('OK'));
+
 if (process.env.NODE_ENV !== 'production') {
   app.listen(port, () => {
     console.log(`Enterprise RAG Backend running on http://localhost:${port}`);
   });
+}
+
+// Self-ping to prevent Render free tier from sleeping (spins down after 15 min inactivity)
+if (process.env.RENDER_EXTERNAL_URL) {
+  const PING_INTERVAL = 14 * 60 * 1000; // 14 minutes
+  setInterval(() => {
+    fetch(`${process.env.RENDER_EXTERNAL_URL}/health`)
+      .then(() => console.log(`Keep-alive ping sent to ${process.env.RENDER_EXTERNAL_URL}/health`))
+      .catch(() => {});
+  }, PING_INTERVAL);
+  console.log(`Keep-alive enabled: pinging ${process.env.RENDER_EXTERNAL_URL}/health every 14 min.`);
 }
 
 export default app;
