@@ -8,29 +8,15 @@ import cors from 'cors';
 import bm25 from 'wink-bm25-text-search';
 import winkNLP from 'wink-nlp-utils';
 import * as lancedb from '@lancedb/lancedb';
-import { Langfuse } from 'langfuse';
+import './instrumentation.js';
+import { startActiveObservation } from '@langfuse/tracing';
 
 dotenv.config();
 
 // Initialize Google AI client once (reused across all requests)
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Initialize Langfuse observability (optional — needs LANGFUSE_SECRET_KEY + LANGFUSE_PUBLIC_KEY in .env)
-let langfuse = null;
-try {
-  if (process.env.LANGFUSE_SECRET_KEY && process.env.LANGFUSE_PUBLIC_KEY) {
-    langfuse = new Langfuse({
-      secretKey: process.env.LANGFUSE_SECRET_KEY,
-      publicKey: process.env.LANGFUSE_PUBLIC_KEY,
-      baseUrl: process.env.LANGFUSE_BASE_URL || process.env.LANGFUSE_BASEURL || process.env.LANGFUSE_HOST || "https://cloud.langfuse.com"
-    });
-    console.log("Langfuse observability initialized at", langfuse.baseUrl);
-  } else {
-    console.warn("No Langfuse keys found. Observability disabled.");
-  }
-} catch (e) {
-  console.warn("Langfuse init failed:", e.message);
-}
+
 
 // Retry wrapper for external API calls (handles 429/503 gracefully)
 async function fetchWithRetry(url, options, retries = 2) {
@@ -103,9 +89,10 @@ app.post('/api/chat', async (req, res) => {
     const userQuery = inputValue || history[history.length - 1]?.parts[0]?.text || "";
 
     // Start observability trace for this request
-    const trace = langfuse?.trace({ name: 'chat', input: userQuery, metadata: { model: selectedModel } });
+    await startActiveObservation("chat", async (traceSpan) => {
+      traceSpan.update({ input: userQuery, metadata: { model: selectedModel } });
 
-    // ----------------------------------------------------
+      // ----------------------------------------------------
     // PHASE 1.5: SLM QUERY REWRITING + HyDE (Groq Llama 3.1 8B)
     // ----------------------------------------------------
     let optimizedQuery = userQuery;
@@ -155,7 +142,9 @@ app.post('/api/chat', async (req, res) => {
 
     // Log query rewrite to observability
     if (optimizedQuery !== userQuery) {
-      trace?.span({ name: 'query_rewrite', input: { original: userQuery }, output: { optimized: optimizedQuery } });
+      await startActiveObservation("query_rewrite", async (span) => {
+        span.update({ input: { original: userQuery }, output: { optimized: optimizedQuery } });
+      });
     }
 
     // ----------------------------------------------------
@@ -234,7 +223,9 @@ app.post('/api/chat', async (req, res) => {
     let bestDocs = hybridTop10.slice(0, 2);
 
     // Log retrieval results to observability
-    trace?.span({ name: 'retrieval', input: { query: optimizedQuery }, output: { dense: denseResults.length, sparse: bm25Results.length, fused: hybridTop10.length, bestDocs: bestDocs.map(d => d.title) } });
+    await startActiveObservation("retrieval", async (span) => {
+      span.update({ input: { query: optimizedQuery }, output: { dense: denseResults.length, sparse: bm25Results.length, fused: hybridTop10.length, bestDocs: bestDocs.map(d => d.title) } });
+    });
 
     // ----------------------------------------------------
     // PHASE 4: CONTEXT-INJECTED GENERATION
@@ -291,8 +282,9 @@ ${JSON.stringify(bestDocs)}`;
 
       const reply = data.choices[0].message.content;
       res.write(reply);
-      trace?.generation({ name: 'llm', model: 'llama-4-scout-17b', input: systemInstruction.substring(0, 200), output: reply });
-      langfuse?.flushAsync().catch(() => {});
+      await startActiveObservation("llm", async (span) => {
+        span.update({ model: 'llama-4-scout-17b', input: systemInstruction.substring(0, 200), output: reply });
+      }, { asType: "generation" });
       res.end();
       return;
     }
@@ -317,9 +309,11 @@ ${JSON.stringify(bestDocs)}`;
         res.write(chunk.text);
       }
     }
-    trace?.generation({ name: 'llm', model: mappedModel, input: systemInstruction.substring(0, 200), output: geminiReply });
-    langfuse?.flushAsync().catch(() => {});
+    await startActiveObservation("llm", async (span) => {
+      span.update({ model: mappedModel, input: systemInstruction.substring(0, 200), output: geminiReply });
+    }, { asType: "generation" });
     res.end();
+  }); // End of chat traceSpan
   } catch (error) {
     console.error('Error in /api/chat execution:', error);
     if (!res.headersSent) {
