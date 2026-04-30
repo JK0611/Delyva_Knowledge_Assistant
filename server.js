@@ -4,10 +4,40 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import cors from 'cors';
-import admin from 'firebase-admin';
-import Fuse from 'fuse.js';
+
+import bm25 from 'wink-bm25-text-search';
+import winkNLP from 'wink-nlp-utils';
+import * as lancedb from '@lancedb/lancedb';
+import { Langfuse } from 'langfuse';
 
 dotenv.config();
+
+// Initialize Google AI client once (reused across all requests)
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+// Initialize Langfuse observability (optional — needs LANGFUSE_SECRET_KEY + LANGFUSE_PUBLIC_KEY in .env)
+let langfuse = null;
+try {
+  if (process.env.LANGFUSE_SECRET_KEY && process.env.LANGFUSE_PUBLIC_KEY) {
+    langfuse = new Langfuse();
+    console.log("Langfuse observability initialized.");
+  } else {
+    console.warn("No Langfuse keys found. Observability disabled.");
+  }
+} catch (e) {
+  console.warn("Langfuse init failed:", e.message);
+}
+
+// Retry wrapper for external API calls (handles 429/503 gracefully)
+async function fetchWithRetry(url, options, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    const res = await fetch(url, options);
+    if (res.ok || (res.status !== 429 && res.status !== 503)) return res;
+    console.warn(`Retry ${i + 1}/${retries} for ${res.status} on ${url}`);
+    await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+  }
+  return fetch(url, options); // final attempt
+}
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -26,76 +56,37 @@ try {
   console.error("Failed to load kb.json");
 }
 
-// Initialize Firebase Admin gracefully
-let dbAdmin = null;
-try {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    admin.initializeApp({
-      credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))
-    });
-    dbAdmin = admin.firestore();
-    console.log("Firebase Admin initialized successfully.");
-  } else {
-    console.warn("No FIREBASE_SERVICE_ACCOUNT found in .env. Falling back to local files for DB.");
-  }
-} catch (e) {
-  console.warn("Failed to initialize Firebase Admin:", e.message);
-}
 
-// 2. Load Vector Store
-let vectorStoreCache = null;
-async function getVectorStore() {
-  if (vectorStoreCache) return vectorStoreCache;
-  
-  let vectorStore = [];
-  
-  // 1. FAST LOCAL PRIORITY (0.05 seconds)
+// 2. Load Vector Store (LanceDB - O(log N) indexed search)
+let lanceTable = null;
+async function getLanceTable() {
+  if (lanceTable) return lanceTable;
   try {
-    vectorStore = JSON.parse(
-      fs.readFileSync(path.resolve('./src/data/vector_store.json'), 'utf-8')
-    );
-    console.log(`Loaded ${vectorStore.length} dense vectors via local file (INSTANT).`);
+    const db = await lancedb.connect('./src/data/lancedb');
+    lanceTable = await db.openTable('vectors');
+    const count = await lanceTable.countRows();
+    console.log(`LanceDB loaded with ${count} vectors (IVF-PQ indexed).`);
   } catch (e) {
-    console.warn("Local vector store not found.");
+    console.warn("LanceDB not found. Run 'node migrate_to_lancedb.mjs' first.", e.message);
   }
-
-  // 2. SLOW FIREBASE FALLBACK (2-4 seconds)
-  if (vectorStore.length === 0 && dbAdmin) {
-    try {
-      const snap = await dbAdmin.collection('vector_store').get();
-      if (!snap.empty) {
-        vectorStore = snap.docs.map(d => d.data());
-        console.log(`Loaded ${vectorStore.length} dense vectors from Firebase (SLOW).`);
-      }
-    } catch (e) {
-      console.warn("Failed to load vectors from Firebase.");
-    }
-  }
-  
-  vectorStoreCache = vectorStore;
-  return vectorStoreCache;
+  return lanceTable;
 }
 
-// Setup Sparse Keyword Matcher (Fuse.js)
-const fuse = new Fuse(kbData, {
-  keys: [
-    { name: 'title', weight: 0.7 },
-    { name: 'content', weight: 0.3 }
-  ],
-  threshold: 0.6,
-  ignoreLocation: true,
-  findAllMatches: true,
-  includeScore: true,
+// Setup Sparse Keyword Matcher (BM25)
+const engine = bm25();
+engine.defineConfig({ fldWeights: { title: 2, content: 1 } });
+engine.definePrepTasks([
+  winkNLP.string.lowerCase, 
+  winkNLP.string.tokenize0, 
+  winkNLP.tokens.removeWords, 
+  winkNLP.tokens.stem,
+  winkNLP.tokens.propagateNegations
+]);
+
+kbData.forEach((doc, i) => {
+  engine.addDoc(doc, i);
 });
-
-// Helper mathematical function for semantic match
-function cosineSimilarity(A, B) {
-  let dotProduct = 0;
-  for (let i = 0; i < A.length; i++) {
-    dotProduct += A[i] * B[i];
-  }
-  return dotProduct;
-}
+engine.consolidate();
 
 app.post('/api/chat', async (req, res) => {
   try {
@@ -105,39 +96,103 @@ app.post('/api/chat', async (req, res) => {
       return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server." });
     }
 
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const userQuery = inputValue || history[history.length - 1]?.parts[0]?.text || "";
 
+    // Start observability trace for this request
+    const trace = langfuse?.trace({ name: 'chat', input: userQuery, metadata: { model: selectedModel } });
+
     // ----------------------------------------------------
-    // PHASE 2A: DENSE SEARCH (Semantic Vector Matching)
+    // PHASE 1.5: SLM QUERY REWRITING + HyDE (Groq Llama 3.1 8B)
+    // ----------------------------------------------------
+    let optimizedQuery = userQuery;
+    let textToEmbed = userQuery;
+    
+    // Rewrite query to fix vague inputs and generate a hypothetical answer
+    if (process.env.GROQ_API_KEY) {
+        console.log(`Using SLM for HyDE on query: "${userQuery}"`);
+        try {
+            const rewriteRes = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    model: "llama-3.1-8b-instant",
+                    response_format: { type: "json_object" },
+                    messages: [{
+                        role: "system",
+                        content: "You are a search optimizer for a courier company. 1. Fix typos and expand the user's query into a clear question. 2. Write a short, fake hypothetical answer to the question. Output EXACTLY in JSON format: {\"query\": \"optimized question\", \"answer\": \"fake answer\"}"
+                    }, {
+                        role: "user",
+                        content: userQuery
+                    }],
+                    temperature: 0.1,
+                    max_tokens: 150
+                })
+            });
+            if (rewriteRes.ok) {
+                const rewriteData = await rewriteRes.json();
+                try {
+                    const parsed = JSON.parse(rewriteData.choices[0].message.content);
+                    optimizedQuery = parsed.query || userQuery;
+                    textToEmbed = optimizedQuery + "\n" + (parsed.answer || "");
+                    console.log(`SLM Optimized Query: "${optimizedQuery}"`);
+                    console.log(`HyDE Generated Answer: "${(parsed.answer || "").substring(0, 50)}..."`);
+                } catch(err) {
+                    optimizedQuery = rewriteData.choices[0].message.content;
+                    textToEmbed = optimizedQuery;
+                }
+            }
+        } catch (e) {
+            console.error("SLM Rewrite/HyDE failed, falling back to original query.", e);
+        }
+    }
+
+    // Log query rewrite to observability
+    if (optimizedQuery !== userQuery) {
+      trace?.span({ name: 'query_rewrite', input: { original: userQuery }, output: { optimized: optimizedQuery } });
+    }
+
+    // ----------------------------------------------------
+    // PHASE 2A: DENSE SEARCH (LanceDB Vector Search)
     // ----------------------------------------------------
     let denseResults = [];
-    const vStore = await getVectorStore();
+    const table = await getLanceTable();
     
-    if (vStore.length > 0) {
+    if (table) {
       try {
         const embedRes = await ai.models.embedContent({
           model: 'gemini-embedding-2-preview',
-          contents: userQuery,
+          contents: textToEmbed,
           config: { taskType: 'RETRIEVAL_QUERY' }
         });
         const queryVector = embedRes.embeddings[0].values;
         
-        denseResults = vStore.map(v => ({
-          item: v.parentDocument,
-          score: cosineSimilarity(queryVector, v.embedding) // 1.0 is a perfect match
-        }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 10);
+        // LanceDB handles the math internally with IVF-PQ indexing
+        const results = await table
+          .vectorSearch(queryVector)
+          .limit(10)
+          .toArray();
+        
+        denseResults = results.map(row => ({
+          item: { title: row.title, category: row.category, url: row.url, content: row.content },
+          score: 1 - row._distance // LanceDB returns L2 distance; convert to similarity
+        }));
       } catch (e) {
-        console.error("Dense search failed mapping embeddings:", e);
+        console.error("Dense search failed (LanceDB):", e);
       }
     }
 
     // ----------------------------------------------------
-    // PHASE 2B: SPARSE SEARCH (Keyword Matching)
+    // PHASE 2B: SPARSE SEARCH (BM25 Keyword Matching)
     // ----------------------------------------------------
-    const sparseResultsRaw = fuse.search(userQuery).slice(0, 10);
+    // BM25 excels at exact keyword matching with TF-IDF weighting.
+    const bm25Results = engine.search(optimizedQuery).slice(0, 10);
+    const sparseResultsRaw = bm25Results.map(res => ({
+      item: kbData[res[0]], // res[0] is the document index
+      score: res[1]         // res[1] is the bm25 score
+    }));
 
     // ----------------------------------------------------
     // PHASE 2C: HYBRID FUSION (Reciprocal Rank Fusion - RRF)
@@ -174,31 +229,74 @@ app.post('/api/chat', async (req, res) => {
     // mathematically excellent ranking without the 4-30s latency penalty of a second LLM cycle.
     let bestDocs = hybridTop10.slice(0, 2);
 
+    // Log retrieval results to observability
+    trace?.span({ name: 'retrieval', input: { query: optimizedQuery }, output: { dense: denseResults.length, sparse: bm25Results.length, fused: hybridTop10.length, bestDocs: bestDocs.map(d => d.title) } });
+
     // ----------------------------------------------------
     // PHASE 4: CONTEXT-INJECTED GENERATION
     // ----------------------------------------------------
     const systemInstruction = `
-You are a customer support routing assistant for DelyvaNow.
-Your ONLY task is to direct the user to ALL relevant articles from the highly verified knowledge base chunk provided below.
+You are a strict customer support routing assistant for DelyvaNow.
+Your ONLY task is to evaluate the provided knowledge base articles and return links to them ONLY IF they exactly match the user's query.
 
 RULES:
-1. DO NOT answer the user's question directly.
-2. INSTEAD, use the provided matching articles below and reply ONLY with a short, polite message containing the link(s).
-3. If there are multiple relevant articles, list ALL of them as a numbered list.
-4. Format the links strictly in Markdown like this: 1. [Article Title](URL)
-5. If the answer cannot be found in the knowledge base chunk below, politely inform them that you couldn't find a matching article and say "please contact our live chat team".
-6. DO NOT make up URLs, hallucinate articles, or use external links outside the provided JSON below.
+1. STRICT RELEVANCE CHECK: If the provided articles do not EXPLICITLY answer the exact primary topic the user is asking about (e.g., if they ask for 'refund' but the article is about 'cancellations'), DO NOT return the article.
+2. If NO articles are an exact match, you MUST reply ONLY with: "I cannot find an article about that. Please contact our live chat team."
+3. DO NOT answer the user's question directly. Only provide links.
+4. If there are relevant articles, reply ONLY with a short, polite message containing the link(s) formatted strictly in Markdown like this: 1. [Article Title](URL)
+5. DO NOT make up URLs or hallucinate articles.
 
-KNOWLEDGE BASE DATA (Top 2 Exact Matches via Semantic Reranker):
+POTENTIAL KNOWLEDGE BASE MATCHES (You must evaluate these strictly, they might be completely irrelevant):
 ${JSON.stringify(bestDocs)}`;
 
-    // Ensure we handle different model identifiers gracefully
-    const mappedModel = selectedModel === "Gemma 4 31B" ? "gemma-4-31b-it" :
-                        selectedModel === "Gemini 3.1 Flash Lite" ? "gemini-3.1-flash-lite-preview" :
-                        selectedModel === "Gemini 2.5 Flash Lite" ? "gemini-2.5-flash-lite" :
-                        selectedModel || "gemini-2.5-flash-lite";
+    console.log(`Sending final prompt to: ${selectedModel || "gemini-2.5-flash-lite"} with ${bestDocs.length} perfect documents...`);
 
-    console.log(`Sending final prompt to: ${mappedModel} with ${bestDocs.length} perfect documents...`);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    // ----------------------------------------------------
+    // GROQ API CALL (Llama 4 Scout 17B)
+    // ----------------------------------------------------
+    if (selectedModel === "Llama 4 Scout 17B") {
+      const mappedHistory = history.map(h => ({
+        role: h.role === 'model' ? 'assistant' : 'user',
+        content: h.parts[0].text
+      }));
+      
+      mappedHistory.unshift({ role: "system", content: systemInstruction });
+
+      const groqRes = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "meta-llama/llama-4-scout-17b-16e-instruct",
+          messages: mappedHistory,
+          temperature: 0,
+          max_tokens: 250,
+          stream: false // Groq is so fast (0.6s) we don't need SSE streaming overhead
+        })
+      });
+
+      const data = await groqRes.json();
+      if (!groqRes.ok) {
+        throw new Error(data.error?.message || "Groq API Error");
+      }
+
+      const reply = data.choices[0].message.content;
+      res.write(reply);
+      trace?.generation({ name: 'llm', model: 'llama-4-scout-17b', input: systemInstruction.substring(0, 200), output: reply });
+      langfuse?.flushAsync().catch(() => {});
+      res.end();
+      return;
+    }
+
+    // ----------------------------------------------------
+    // GEMINI API CALL (Fallback/Alternative)
+    // ----------------------------------------------------
+    const mappedModel = selectedModel === "Gemini 3.1 Flash Lite" ? "gemini-3.1-flash-lite-preview" : "gemini-2.5-flash-lite";
 
     const stream = await ai.models.generateContentStream({
       model: mappedModel,
@@ -208,14 +306,15 @@ ${JSON.stringify(bestDocs)}`;
       }
     });
 
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Transfer-Encoding', 'chunked');
-
+    let geminiReply = '';
     for await (const chunk of stream) {
       if (chunk.text) {
+        geminiReply += chunk.text;
         res.write(chunk.text);
       }
     }
+    trace?.generation({ name: 'llm', model: mappedModel, input: systemInstruction.substring(0, 200), output: geminiReply });
+    langfuse?.flushAsync().catch(() => {});
     res.end();
   } catch (error) {
     console.error('Error in /api/chat execution:', error);

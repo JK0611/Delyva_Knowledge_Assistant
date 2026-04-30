@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from './firebase';
+
 import { Send, Bot, User, Loader2, Sparkles, ThumbsUp, ThumbsDown, ChevronUp } from 'lucide-react';
 import { Scrollbars } from 'react-custom-scrollbars-2';
 import { Analytics } from '@vercel/analytics/react';
+import DOMPurify from 'dompurify';
 
 export default function App() {
   const [messages, setMessages] = useState<{role: string, text: string, isError?: boolean, feedback?: 'up' | 'down', generationTime?: string}>([
@@ -15,7 +15,7 @@ export default function App() {
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("Gemini 2.5 Flash Lite");
+  const [selectedModel, setSelectedModel] = useState("Llama 4 Scout 17B");
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const faqScrollbarRef = useRef<Scrollbars>(null);
@@ -60,38 +60,24 @@ export default function App() {
     return sid;
   };
 
-  // Load chat history on mount
+  // Load chat history on mount (localStorage)
   useEffect(() => {
-    if (!db) return;
-    const loadHistory = async () => {
-      try {
-        const docRef = doc(db, 'sessions', getOrSetSessionId());
-        const snap = await getDoc(docRef);
-        if (snap.exists() && snap.data().history) {
-          setMessages(snap.data().history);
-        }
-      } catch (e) {
-        console.error("Firebase history load error:", e);
-      }
-    };
-    loadHistory();
+    try {
+      const saved = localStorage.getItem(`chat_${getOrSetSessionId()}`);
+      if (saved) setMessages(JSON.parse(saved));
+    } catch (e) {
+      console.error("History load error:", e);
+    }
   }, []);
 
   // Save chat history automatically when messages change
   useEffect(() => {
-    if (!db || messages.length <= 1) return;
-    const saveHistory = async () => {
-      try {
-        const docRef = doc(db, 'sessions', getOrSetSessionId());
-        await setDoc(docRef, { 
-          history: messages, 
-          updatedAt: new Date().toISOString() 
-        }, { merge: true });
-      } catch (e) {
-        console.error("Firebase history save error:", e);
-      }
-    };
-    saveHistory();
+    if (messages.length <= 1) return;
+    try {
+      localStorage.setItem(`chat_${getOrSetSessionId()}`, JSON.stringify(messages));
+    } catch (e) {
+      console.error("History save error:", e);
+    }
   }, [messages]);
 
   useEffect(() => {
@@ -235,7 +221,7 @@ export default function App() {
     return formattedText.split('\n').map((line, i) => (
       <p 
         key={i} 
-        dangerouslySetInnerHTML={{ __html: line || '<br/>' }} 
+        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(line || '<br/>') }} 
         className={line ? "mb-1.5 last:mb-0" : ""}
       />
     ));
@@ -420,11 +406,19 @@ export default function App() {
                     <div className="flex flex-col gap-1">
                       <button 
                         type="button"
+                        onClick={() => { setSelectedModel("Llama 4 Scout 17B"); setIsModelMenuOpen(false); }}
+                        className={`flex flex-col items-start px-3 py-2.5 transition-colors text-left rounded-xl ${selectedModel === "Llama 4 Scout 17B" ? "bg-black/20" : "hover:bg-white/10"}`}
+                      >
+                        <span className="text-[15px] font-medium leading-tight">Llama 4 Scout 17B</span>
+                        <span className="text-[13px] text-white/70 leading-tight mt-0.5">Recommended</span>
+                      </button>
+                      <button 
+                        type="button"
                         onClick={() => { setSelectedModel("Gemini 2.5 Flash Lite"); setIsModelMenuOpen(false); }}
                         className={`flex flex-col items-start px-3 py-2.5 transition-colors text-left rounded-xl ${selectedModel === "Gemini 2.5 Flash Lite" ? "bg-black/20" : "hover:bg-white/10"}`}
                       >
                         <span className="text-[15px] font-medium leading-tight">Gemini 2.5 Flash Lite</span>
-                        <span className="text-[13px] text-white/70 leading-tight mt-0.5">Recommended</span>
+                        <span className="text-[13px] text-white/70 leading-tight mt-0.5">Second option</span>
                       </button>
                       <button 
                         type="button"
@@ -432,14 +426,6 @@ export default function App() {
                         className={`flex flex-col items-start px-3 py-2.5 transition-colors text-left rounded-xl ${selectedModel === "Gemini 3.1 Flash Lite" ? "bg-black/20" : "hover:bg-white/10"}`}
                       >
                         <span className="text-[15px] font-medium leading-tight">Gemini 3.1 Flash Lite</span>
-                        <span className="text-[13px] text-white/70 leading-tight mt-0.5">Second option</span>
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={() => { setSelectedModel("Gemma 4 31B"); setIsModelMenuOpen(false); }}
-                        className={`flex flex-col items-start px-3 py-2.5 transition-colors text-left rounded-xl ${selectedModel === "Gemma 4 31B" ? "bg-black/20" : "hover:bg-white/10"}`}
-                      >
-                        <span className="text-[15px] font-medium leading-tight">Gemma 4 31B</span>
                         <span className="text-[13px] text-white/70 leading-tight mt-0.5">Third option</span>
                       </button>
                     </div>
