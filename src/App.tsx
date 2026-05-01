@@ -35,15 +35,18 @@ export default function App() {
     };
   }, [isModelMenuOpen]);
   const suggestions = [
-    "What if my courier did not pick up?",
-    "What is Delyva?",
-    "How to top up?",
-    "How COD works?",
-    "Track my parcel",
-    "How to integrate API?",
-    "What are the delivery rates?",
-    "How to cancel a shipment?",
-    "Where is my invoice?"
+    "Developer Guide",
+    "Easystore Integration",
+    "Shopify Integration",
+    "Orderla Integration",
+    "WooCommerce Integration",
+    "Parcel not picked up",
+    "Ninja Cold Points",
+    "Deliver with COD",
+    "View my invoices",
+    "Packaging Guideline",
+    "Insurance",
+    "How to top up"
   ];
 
   // Auto-scroll to the bottom of the chat
