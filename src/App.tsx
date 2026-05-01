@@ -4,8 +4,10 @@ import { Send, Bot, User, Loader2, Sparkles, ThumbsUp, ThumbsDown, ChevronUp, Sq
 import { Scrollbars } from 'react-custom-scrollbars-2';
 import { Analytics } from '@vercel/analytics/react';
 import DOMPurify from 'dompurify';
+import UpdateDatabase from './UpdateDatabase';
 
 export default function App() {
+  const [currentView, setCurrentView] = useState<'chat' | 'update'>('chat');
   const [messages, setMessages] = useState<{ role: string, text: string, isError?: boolean, feedback?: 'up' | 'down', generationTime?: string }>([
     {
       role: 'model',
@@ -248,10 +250,14 @@ export default function App() {
     ));
   };
 
-  // --- UI: Chat Screen ---
-  return (
-    <div className="min-h-[100dvh] bg-[#F3F4F6] sm:p-6 font-sans flex sm:items-center sm:justify-center">
-      <div className="w-full max-w-4xl h-[100dvh] sm:h-[85vh] bg-white sm:rounded-[2rem] shadow-none sm:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.1)] flex flex-col overflow-hidden border-none sm:border border-slate-200/60 relative">
+    // --- UI: Chat Screen ---
+    if (currentView === 'update') {
+      return <UpdateDatabase onBack={() => setCurrentView('chat')} />;
+    }
+
+    return (
+      <div className="min-h-[100dvh] bg-[#F3F4F6] sm:p-6 font-sans flex sm:items-center sm:justify-center">
+        <div className="w-full max-w-4xl h-[100dvh] sm:h-[85vh] bg-white sm:rounded-[2rem] shadow-none sm:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.1)] flex flex-col overflow-hidden border-none sm:border border-slate-200/60 relative">
 
         {/* Header */}
         <div className="bg-gradient-to-r from-blue-700 to-blue-500 text-white p-3 sm:p-4 flex items-center justify-between shrink-0 shadow-sm z-10 relative overflow-hidden">
@@ -274,6 +280,13 @@ export default function App() {
               </div>
             </div>
           </div>
+          
+          <button 
+            onClick={() => setCurrentView('update')}
+            className="relative z-10 bg-white/20 hover:bg-white/30 backdrop-blur-md border border-white/20 shadow-inner px-4 py-1.5 rounded-full text-sm font-medium transition-colors flex items-center gap-2"
+          >
+            Update DB
+          </button>
         </div>
 
         {/* Chat Area */}

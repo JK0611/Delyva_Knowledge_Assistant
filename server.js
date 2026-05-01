@@ -4,6 +4,9 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import cors from 'cors';
+import multer from 'multer';
+import pdfParse from 'pdf-parse';
+import * as cheerio from 'cheerio';
 
 import bm25 from 'wink-bm25-text-search';
 import winkNLP from 'wink-nlp-utils';
@@ -63,20 +66,27 @@ async function getLanceTable() {
 }
 
 // Setup Sparse Keyword Matcher (BM25)
-const engine = bm25();
-engine.defineConfig({ fldWeights: { title: 2, content: 1 } });
-engine.definePrepTasks([
-  winkNLP.string.lowerCase, 
-  winkNLP.string.tokenize0, 
-  winkNLP.tokens.removeWords, 
-  winkNLP.tokens.stem,
-  winkNLP.tokens.propagateNegations
-]);
+let engine = bm25();
 
-kbData.forEach((doc, i) => {
-  engine.addDoc(doc, i);
-});
-engine.consolidate();
+function rebuildBM25Engine() {
+  engine = bm25();
+  engine.defineConfig({ fldWeights: { title: 2, content: 1 } });
+  engine.definePrepTasks([
+    winkNLP.string.lowerCase, 
+    winkNLP.string.tokenize0, 
+    winkNLP.tokens.removeWords, 
+    winkNLP.tokens.stem,
+    winkNLP.tokens.propagateNegations
+  ]);
+
+  kbData.forEach((doc, i) => {
+    engine.addDoc(doc, i);
+  });
+  engine.consolidate();
+  console.log(`BM25 Engine consolidated with ${kbData.length} documents.`);
+}
+
+rebuildBM25Engine();
 
 app.post('/api/chat', async (req, res) => {
   try {
@@ -340,6 +350,100 @@ ${JSON.stringify(bestDocs)}`;
   }
 });
 
+// Setup multer for in-memory file uploads
+const upload = multer({ storage: multer.memoryStorage() });
+
+app.post('/api/update-kb', upload.array('files'), async (req, res) => {
+  try {
+    const { type, title, urls } = req.body;
+    
+    let newDocs = [];
+
+    if (type === 'file' && req.files) {
+      // Process uploaded PDFs
+      for (const file of req.files) {
+        if (file.mimetype === 'application/pdf') {
+          const pdfData = await pdfParse(file.buffer);
+          newDocs.push({
+            title: title || file.originalname,
+            url: "uploaded-file",
+            category: "Uploaded Document",
+            content: pdfData.text
+          });
+        }
+      }
+    } else if (type === 'url' && urls) {
+      // Process URLs
+      const parsedUrls = JSON.parse(urls);
+      for (const url of parsedUrls) {
+        try {
+          const response = await fetchWithRetry(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          const html = await response.text();
+          const $ = cheerio.load(html);
+          
+          // Remove scripts and styles
+          $('script, style, noscript, iframe').remove();
+          const textContent = $('body').text().replace(/\s+/g, ' ').trim();
+          const pageTitle = $('title').text() || url;
+          
+          newDocs.push({
+            title: pageTitle,
+            url: url,
+            category: "Web Link",
+            content: textContent
+          });
+        } catch (e) {
+          console.error(`Failed to fetch URL ${url}:`, e);
+          // Still create an entry, but maybe with less content
+        }
+      }
+    }
+
+    if (newDocs.length === 0) {
+      return res.status(400).json({ error: "No valid content found to update." });
+    }
+
+    // 1. Update LanceDB
+    const table = await getLanceTable();
+    if (table) {
+      const lanceRows = [];
+      for (const doc of newDocs) {
+        // Generate embedding
+        const embedRes = await ai.models.embedContent({
+          model: 'gemini-embedding-2-preview',
+          contents: doc.title + "\\n" + doc.content,
+          config: { taskType: 'RETRIEVAL_DOCUMENT' }
+        });
+        
+        lanceRows.push({
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          title: doc.title,
+          category: doc.category,
+          url: doc.url,
+          content: doc.content,
+          vector: embedRes.embeddings[0].values
+        });
+      }
+      
+      await table.add(lanceRows);
+      console.log(`Added ${lanceRows.length} new documents to LanceDB.`);
+    }
+
+    // 2. Update BM25 Engine
+    newDocs.forEach((doc) => {
+      kbData.push(doc);
+    });
+    rebuildBM25Engine();
+
+    // 3. Update kb.json file
+    fs.writeFileSync(path.resolve('./src/data/kb.json'), JSON.stringify(kbData, null, 2), 'utf-8');
+
+    res.json({ success: true, count: newDocs.length });
+  } catch (error) {
+    console.error("Error updating KB:", error);
+    res.status(500).json({ error: "Failed to update database: " + error.message });
+  }
+});
 
 // Health check endpoint (used by self-ping to prevent Render sleep)
 app.get('/health', (req, res) => res.send('OK'));
