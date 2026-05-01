@@ -93,14 +93,61 @@ app.post('/api/chat', async (req, res) => {
       traceSpan.update({ input: userQuery, metadata: { model: selectedModel } });
 
       // ----------------------------------------------------
-    // PHASE 1.5: SLM QUERY REWRITING + HyDE (Groq Llama 3.1 8B)
+    // PHASE 1.5 & 2: SEARCH WITH OPTIONAL REWRITE
     // ----------------------------------------------------
     let optimizedQuery = userQuery;
     let textToEmbed = userQuery;
-    
-    // Rewrite query to fix vague inputs and generate a hypothetical answer
-    if (process.env.GROQ_API_KEY) {
-        console.log(`Using SLM for HyDE on query: "${userQuery}"`);
+    let denseResults = [];
+    let bm25Results = [];
+    let sparseResultsRaw = [];
+
+    const performSearch = async (q, embedText) => {
+      let dRes = [];
+      const table = await getLanceTable();
+      if (table) {
+        try {
+          const embedRes = await ai.models.embedContent({
+            model: 'gemini-embedding-2-preview',
+            contents: embedText,
+            config: { taskType: 'RETRIEVAL_QUERY' }
+          });
+          const queryVector = embedRes.embeddings[0].values;
+          
+          // LanceDB handles the math internally with IVF-PQ indexing
+          const results = await table.vectorSearch(queryVector).limit(10).toArray();
+          dRes = results.map(row => ({
+            item: { title: row.title, category: row.category, url: row.url, content: row.content },
+            score: 1 - row._distance,
+            distance: row._distance
+          }));
+        } catch (e) {
+          console.error("Dense search failed (LanceDB):", e);
+        }
+      }
+
+      // BM25 excels at exact keyword matching with TF-IDF weighting.
+      const bRes = engine.search(q).slice(0, 10);
+      const sResRaw = bRes.map(res => ({
+        item: kbData[res[0]], // res[0] is the document index
+        score: res[1]         // res[1] is the bm25 score
+      }));
+
+      return { dRes, bRes, sResRaw };
+    };
+
+    // 1. Initial Search
+    let searchOutput = await performSearch(userQuery, userQuery);
+    denseResults = searchOutput.dRes;
+    bm25Results = searchOutput.bRes;
+    sparseResultsRaw = searchOutput.sResRaw;
+
+    // 2. Evaluate if we "failed to find something"
+    const bestDenseDist = denseResults.length > 0 ? denseResults[0].distance : 1.0;
+    // We consider it a failure if BM25 found absolutely no keywords, or if the best dense result is very far (> 0.65 L2 distance)
+    const failedToFind = bm25Results.length === 0 || bestDenseDist > 0.65;
+
+    if (failedToFind && process.env.GROQ_API_KEY) {
+        console.log(`Poor initial search results (BM25: ${bm25Results.length}, Dense L2: ${bestDenseDist.toFixed(3)}). Rewriting query...`);
         try {
             const rewriteRes = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
                 method: "POST",
@@ -113,7 +160,7 @@ app.post('/api/chat', async (req, res) => {
                     response_format: { type: "json_object" },
                     messages: [{
                         role: "system",
-                        content: "You are a search optimizer for a courier company. 1. Fix typos and expand the user's query into a clear question. 2. Write a short, fake hypothetical answer to the question. Output EXACTLY in JSON format: {\"query\": \"optimized question\", \"answer\": \"fake answer\"}"
+                        content: "You are a search optimizer. The user's query failed to find results. 1. First, fix grammar and typos. 2. Do NOT change the meaning too much; rewrite with almost similar meaning. 3. Write a short, fake hypothetical answer to help semantic search. Output EXACTLY in JSON format: {\"query\": \"optimized question\", \"answer\": \"fake answer\"}"
                     }, {
                         role: "user",
                         content: userQuery
@@ -129,14 +176,19 @@ app.post('/api/chat', async (req, res) => {
                     optimizedQuery = parsed.query || userQuery;
                     textToEmbed = optimizedQuery + "\n" + (parsed.answer || "");
                     console.log(`SLM Optimized Query: "${optimizedQuery}"`);
-                    console.log(`HyDE Generated Answer: "${(parsed.answer || "").substring(0, 50)}..."`);
+                    
+                    // 3. Retry Search with Rewritten Query
+                    searchOutput = await performSearch(optimizedQuery, textToEmbed);
+                    denseResults = searchOutput.dRes;
+                    bm25Results = searchOutput.bRes;
+                    sparseResultsRaw = searchOutput.sResRaw;
                 } catch(err) {
                     optimizedQuery = rewriteData.choices[0].message.content;
                     textToEmbed = optimizedQuery;
                 }
             }
         } catch (e) {
-            console.error("SLM Rewrite/HyDE failed, falling back to original query.", e);
+            console.error("SLM Rewrite failed.", e);
         }
     }
 
@@ -146,46 +198,6 @@ app.post('/api/chat', async (req, res) => {
         span.update({ input: { original: userQuery }, output: { optimized: optimizedQuery } });
       });
     }
-
-    // ----------------------------------------------------
-    // PHASE 2A: DENSE SEARCH (LanceDB Vector Search)
-    // ----------------------------------------------------
-    let denseResults = [];
-    const table = await getLanceTable();
-    
-    if (table) {
-      try {
-        const embedRes = await ai.models.embedContent({
-          model: 'gemini-embedding-2-preview',
-          contents: textToEmbed,
-          config: { taskType: 'RETRIEVAL_QUERY' }
-        });
-        const queryVector = embedRes.embeddings[0].values;
-        
-        // LanceDB handles the math internally with IVF-PQ indexing
-        const results = await table
-          .vectorSearch(queryVector)
-          .limit(10)
-          .toArray();
-        
-        denseResults = results.map(row => ({
-          item: { title: row.title, category: row.category, url: row.url, content: row.content },
-          score: 1 - row._distance // LanceDB returns L2 distance; convert to similarity
-        }));
-      } catch (e) {
-        console.error("Dense search failed (LanceDB):", e);
-      }
-    }
-
-    // ----------------------------------------------------
-    // PHASE 2B: SPARSE SEARCH (BM25 Keyword Matching)
-    // ----------------------------------------------------
-    // BM25 excels at exact keyword matching with TF-IDF weighting.
-    const bm25Results = engine.search(optimizedQuery).slice(0, 10);
-    const sparseResultsRaw = bm25Results.map(res => ({
-      item: kbData[res[0]], // res[0] is the document index
-      score: res[1]         // res[1] is the bm25 score
-    }));
 
     // ----------------------------------------------------
     // PHASE 2C: HYBRID FUSION (Reciprocal Rank Fusion - RRF)
