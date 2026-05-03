@@ -8,13 +8,15 @@ Welcome to the **Delyva FAQ Assistant**, a modern, full-stack application design
 
 - [🎯 What Is Delyva FAQ Assistant?](#what-is-delyva-faq-assistant)
 - [✨ Features](#-features)
-- [🚀 Quickstart](#-quickstart)
+- [🚀 Try It Out!](#-try-it-out)
 - [🔑 Environment Variables](#-environment-variables)
 - [📚 Data Ingestion](#-data-ingestion)
 - [❔ FAQ](#-faq)
 
 ## What Is Delyva FAQ Assistant?
 Delyva FAQ Assistant is a custom-built support bot utilizing Hybrid Search RAG pipelines for querying and interacting with your support documentation. It leverages Google Gemini for powerful generative capabilities, LanceDB for fast vector search, and BM25 for keyword search, ensuring highly accurate retrieval. The system is split into a robust Express backend to protect your API keys and a responsive React frontend for an optimal user experience.
+
+## 🏛️ Architecture Diagram
 
 <div align="center">
   <img src="./architecture.svg" alt="Delyva FAQ Assistant Architecture" />
@@ -50,26 +52,10 @@ Delyva FAQ Assistant is a custom-built support bot utilizing Hybrid Search RAG p
 
 ---
 
-## 🚀 Quickstart
+## 🚀 Try It Out!
 
-1. **Install Dependencies**
-   Ensure you have Node.js installed, then run:
-   ```bash
-   npm install
-   ```
-
-2. **Configure Environment Variables**
-   Create a `.env` file in the root directory and add your API keys (see [Environment Variables](#-environment-variables) below).
-
-3. **Start the Application**
-   Launch both the React frontend and Express backend simultaneously:
-   ```bash
-   npm run dev:all
-   ```
-
-4. **Access the Application**
-   - Frontend: `http://localhost:3000`
-   - Backend API: `http://localhost:3001`
+You can start using the live Delyva FAQ Assistant immediately:  
+**[👉 Access the Live Bot Here](https://delyva-knowledge-assistant.onrender.com)**
 
 ---
 
