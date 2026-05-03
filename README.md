@@ -1,44 +1,110 @@
-# Vibe Coding - FAQ Bot (Delyva Assistant)
+# 🤖 Delyva FAQ Assistant ✨
+[![React](https://img.shields.io/badge/Frontend-React-blue?style=flat-square&logo=react)](https://reactjs.org/)
+[![Vite](https://img.shields.io/badge/Bundler-Vite-646CFF?style=flat-square&logo=vite)](https://vitejs.dev/)
+[![Express](https://img.shields.io/badge/Backend-Express-lightgrey?style=flat-square&logo=express)](https://expressjs.com/)
+[![LanceDB](https://img.shields.io/badge/Database-LanceDB-orange?style=flat-square)](https://lancedb.com/)
 
-這是一套基於 React, Vite 搭配 Express 開發的智能客服機器人系統，整合了 Google Gemini API，能夠讀取知識庫文件給予準確的回覆。
+Welcome to the **Delyva FAQ Assistant**, a modern, full-stack application designed to provide an intelligent Retrieval-Augmented Generation (RAG) chatbot experience. Built with React and Express, it seamlessly integrates with Google's Gemini AI and LanceDB to provide accurate, context-aware answers from your custom knowledge base. In just a few easy steps, you can upload PDFs or web links, process them, and let the bot answer queries based on the provided documents!
 
-## 功能介紹
-* **獨立後端代理 Server**: 透過 Express 處理 Gemini API 請求，防護 API Key 不外洩。
-* **分離式架構**: 前端 React 與後端分離，前端僅需向 `/api/chat` 發送對話紀錄，由後端注入提示詞(知識庫與防護措施)後詢問 AI。
-* **一鍵雙開**: 開發環境內建 `npm run dev:all` 腳本，透過 concurrently 一次啟動前端與後端，大幅增加開發效率。
-* **自動化部署**: 已配置 GitHub Action，當推送至 `main` 分支時，會自動將前端構建部署至 GitHub Pages。 
+- [🎯 What Is Delyva FAQ Assistant?](#what-is-delyva-faq-assistant)
+- [✨ Features](#-features)
+- [🚀 Quickstart](#-quickstart)
+- [🔑 Environment Variables](#-environment-variables)
+- [📚 Data Ingestion](#-data-ingestion)
+- [❔ FAQ](#-faq)
 
-## 開發指南
+## What Is Delyva FAQ Assistant?
+Delyva FAQ Assistant is a custom-built support bot utilizing Hybrid Search RAG pipelines for querying and interacting with your support documentation. It leverages Google Gemini for powerful generative capabilities, LanceDB for fast vector search, and BM25 for keyword search, ensuring highly accurate retrieval. The system is split into a robust Express backend to protect your API keys and a responsive React frontend for an optimal user experience.
 
+---
 
-1. **安裝環境與依賴 Package**
+## ✨ Features
+
+| 🤖 Model Support | Implemented | Description |
+| --- | --- | --- |
+| Google Gemini | ✅ | Embedding and Generation Models powered by Google GenAI |
+| Groq | ✅ | Fast generation API via Groq |
+
+| 📁 Data Support | Implemented | Description |
+| --- | --- | --- |
+| PDF Ingestion | ✅ | Upload and parse `.pdf` documents (`pdf-parse`) |
+| Web Scraping | ✅ | Provide URLs to be automatically scraped and ingested (`cheerio`) |
+
+| ✨ RAG Features | Implemented | Description |
+| --- | --- | --- |
+| Hybrid Search | ✅ | Semantic Search (LanceDB) combined with Keyword Search (BM25) |
+| Agentic Chunking | ✅ | AI-driven semantic chunking powered by LangChain and Gemini |
+| Query Rewriting | ✅ | Intelligent rewriting of user queries for optimal search results |
+| Pause Generation | ✅ | Functional pause button to interrupt ongoing bot responses |
+| Observability | ✅ | Full RAG pipeline tracing via Langfuse |
+
+| 🆒 Additional Highlights | Implemented | Description |
+| --- | --- | --- |
+| Admin Interface | ✅ | Secure portal for managing the knowledge base |
+| One-Click Start | ✅ | Run both frontend and backend concurrently via a single script |
+| CI/CD Pipeline | ✅ | Automated GitHub Actions deployment for the frontend |
+
+---
+
+## 🚀 Quickstart
+
+1. **Install Dependencies**
+   Ensure you have Node.js installed, then run:
    ```bash
    npm install
    ```
 
-2. **設定環境變數**
-   請將根目錄的 `.env.example` 複製或重新命名為 `.env`，並放入真實的介接鑰匙：
-   ```env
-   GEMINI_API_KEY=your_actual_api_key_here
-   ```
+2. **Configure Environment Variables**
+   Create a `.env` file in the root directory and add your API keys (see [Environment Variables](#-environment-variables) below).
 
-3. **啟動測試是否可以運行**
-   我們已經配置了同時啟動前端(Port 3000)與後端(Port 3001)的腳本：
+3. **Start the Application**
+   Launch both the React frontend and Express backend simultaneously:
    ```bash
    npm run dev:all
    ```
-   > 啟動完成後，前端網頁與 Express API 就會完美運行了，您可以直接在網頁上送出聊天資料。
 
-## 部署上線 (GitHub Actions)
+4. **Access the Application**
+   - Frontend: `http://localhost:3000`
+   - Backend API: `http://localhost:3001`
 
-專案預設包含 `.github/workflows/deploy.yml` 檔案。
-當您 push 更新到 `main` 時，GitHub Actions 會執行以下任務：
-1. 自動安裝套件並構建 React 前端 (`npm run build`)。
-2. 將打包輸出目錄 `dist` 透過 GitHub Pages 發佈，實現自動上線。
+---
 
-**注意：**
-- 此 Action 專門用於部署靜態前端。若要在線上環境提供完整的 AI 代理服務，您也需要將後端的 `server.js` 部署到如 Render、Heroku 或 Zeabur 等 Node.js 主機（部署後請記得更新前端內部請求 API 的來源並開啟後端 CORS 配置）。
+## 🔑 Environment Variables
 
-## 資料夾控管與隱私防護
+To run the application, you need to configure the following environment variables in a `.env` file at the root of your project:
 
-- **.gitignore**: 我們採用業界標準配置設計了 `.gitignore`，已過濾 Node.js `node_modules` 快取、IDE設定（如 `.vscode`）、OS暫存與最關鍵的 `.env` 檔案以避免私鑰上傳。
+| Environment Variable | Description |
+| --- | --- |
+| `GEMINI_API_KEY` | **Required**. Your Google Gemini API Key |
+| `GROQ_API_KEY` | Your Groq API Key |
+| `LANGFUSE_SECRET_KEY` | Secret Key for Langfuse Observability |
+| `LANGFUSE_PUBLIC_KEY` | Public Key for Langfuse Observability |
+| `LANGFUSE_HOST` | Host URL for Langfuse (e.g., `https://cloud.langfuse.com`) |
+
+> You can copy `.env.example` to `.env` to get started quickly.
+
+---
+
+## 📚 Data Ingestion
+
+The application provides a built-in admin interface to easily upload and manage knowledge base documents:
+- **Add Files**: Upload PDF documents. The backend will parse the text and generate semantic chunks.
+- **Add URL**: Provide website links. The system will crawl the page, extract relevant text using Cheerio, and add it to the database.
+
+Once uploaded, the data is stored in the local `kb.json` and LanceDB vector store, immediately becoming available for the FAQ Bot to retrieve.
+
+---
+
+## ❔ FAQ
+
+- **Are my API keys safe?**
+  Yes! The architecture is intentionally separated. The React frontend communicates only with the Express backend. Your `GEMINI_API_KEY` is safely stored on the server side and is never exposed to the client.
+  
+- **How is the search performed?**
+  We use a Hybrid Search approach. It combines BM25 keyword matching (via `wink-bm25-text-search`) with semantic vector similarity (via LanceDB) to find the most accurate chunks for answering a user's query.
+
+- **Can I stop the bot from generating a long response?**
+  Yes, there is a built-in pause/stop functionality on the frontend UI to abort the generation stream.
+
+- **How do I deploy this project?**
+  The `.github/workflows/deploy.yml` automatically builds and deploys the static React frontend to GitHub Pages on every push to `main`. You will need to host your backend `server.js` on a Node.js provider (like Render, Heroku, etc.) and update your frontend's API URL to point to it.
