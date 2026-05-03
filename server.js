@@ -6,6 +6,7 @@ import path from 'path';
 import cors from 'cors';
 import multer from 'multer';
 import pdfParse from 'pdf-parse';
+import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import * as cheerio from 'cheerio';
 
 import bm25 from 'wink-bm25-text-search';
@@ -238,11 +239,57 @@ app.post('/api/chat', async (req, res) => {
       .map(x => x.item);
 
     // ----------------------------------------------------
-    // PHASE 3: CROSS-ENCODER RERANKING (By-passed for performance)
+    // PHASE 3: INTELLIGENT RERANKING (LLM-Based Cross-Encoder Alternative)
     // ----------------------------------------------------
-    // We rely solely on the Reciprocal Rank Fusion (hybridTop10) which provides
-    // mathematically excellent ranking without the 4-30s latency penalty of a second LLM cycle.
-    let bestDocs = hybridTop10.slice(0, 2);
+    let bestDocs = hybridTop10.slice(0, 2); // Default fallback
+
+    if (hybridTop10.length > 0 && process.env.GROQ_API_KEY) {
+      console.log("Triggering LLM Reranker for top 5 candidates...");
+      try {
+        const top5 = hybridTop10.slice(0, 5);
+        const docsForRerank = top5.map((d, i) => `[DOC ${i}]: ${d.title}\n${d.content.substring(0, 300)}`).join('\n\n');
+
+        const rerankPrompt = `You are a strict relevance reranker. 
+User Query: "${optimizedQuery}"
+
+Evaluate these 5 documents. Return a JSON object with a single key "best_indices" containing an array of the indices (0-4) of the 1 or 2 most relevant documents, ordered from best to worst. 
+If no document answers the query perfectly, return an empty array [].
+
+Documents:
+${docsForRerank}`;
+
+        const rerankRes = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "llama-3.1-8b-instant",
+            response_format: { type: "json_object" },
+            messages: [{ role: "system", content: rerankPrompt }],
+            temperature: 0.1,
+            max_tokens: 50
+          })
+        });
+
+        if (rerankRes.ok) {
+          const rerankData = await rerankRes.json();
+          const parsed = JSON.parse(rerankData.choices[0].message.content);
+          if (parsed.best_indices && Array.isArray(parsed.best_indices)) {
+             if (parsed.best_indices.length > 0) {
+               bestDocs = parsed.best_indices.map(idx => top5[idx]).filter(Boolean).slice(0, 2);
+               console.log(`LLM Reranker selected indices: ${parsed.best_indices}`);
+             } else {
+               bestDocs = [];
+               console.log("LLM Reranker decided no documents were relevant.");
+             }
+          }
+        }
+      } catch (e) {
+        console.error("LLM Reranking failed, falling back to RRF top 2.", e);
+      }
+    }
 
     // Log retrieval results to observability
     await startActiveObservation("retrieval", async (span) => {
@@ -252,19 +299,20 @@ app.post('/api/chat', async (req, res) => {
     // ----------------------------------------------------
     // PHASE 4: CONTEXT-INJECTED GENERATION
     // ----------------------------------------------------
+    const contextText = bestDocs.map((d, index) => `Article ${index + 1}:\nTitle: ${d.title}\nURL: ${d.url}\nContent: ${d.content}`).join('\n\n');
+
     const systemInstruction = `
-You are a strict customer support routing assistant for DelyvaNow.
-Your ONLY task is to evaluate the provided knowledge base articles and return links to them ONLY IF they exactly match the user's query.
+You are a customer support assistant for DelyvaNow.
+Your task is to help users find answers based ONLY on the provided knowledge base articles.
 
 RULES:
-1. STRICT RELEVANCE CHECK: If the provided articles do not EXPLICITLY answer the exact primary topic the user is asking about (e.g., if they ask for 'refund' but the article is about 'cancellations'), DO NOT return the article.
-2. If NO articles are an exact match, you MUST reply ONLY with: "I cannot find an article about that. Please contact our live chat team."
-3. DO NOT answer the user's question directly. Only provide links.
-4. If there are relevant articles, reply ONLY with a short, polite message containing the link(s) formatted strictly in Markdown like this: 1. [Article Title](URL)
-5. DO NOT make up URLs or hallucinate articles.
+1. WEB LINKS (Priority): If a relevant article has a real web URL (starting with "http"), do NOT answer the question directly. Instead, provide ONLY the link formatted as: 1. [Article Title](URL)
+2. UPLOADED FILES: If the most relevant article has a URL of "uploaded-file", you MUST read the provided content and answer the user's question directly and concisely in text. Do NOT provide the link "uploaded-file".
+3. STRICT RELEVANCE: If the provided articles do not answer the user's specific query, you MUST reply: "I cannot find an article about that. Please contact our live chat team."
+4. DO NOT make up information or URLs outside of the provided context.
 
-POTENTIAL KNOWLEDGE BASE MATCHES (You must evaluate these strictly, they might be completely irrelevant):
-${JSON.stringify(bestDocs)}`;
+POTENTIAL KNOWLEDGE BASE MATCHES:
+${contextText}`;
 
     console.log(`Sending final prompt to: ${selectedModel || "gemini-2.5-flash-lite"} with ${bestDocs.length} perfect documents...`);
 
@@ -275,7 +323,7 @@ ${JSON.stringify(bestDocs)}`;
     // GROQ API CALL (Llama 4 Scout 17B)
     // ----------------------------------------------------
     if (selectedModel === "Llama 4 Scout 17B") {
-      const mappedHistory = history.map(h => ({
+      const mappedHistory = history.slice(-6).map(h => ({
         role: h.role === 'model' ? 'assistant' : 'user',
         content: h.parts[0].text
       }));
@@ -318,7 +366,7 @@ ${JSON.stringify(bestDocs)}`;
 
     const stream = await ai.models.generateContentStream({
       model: mappedModel,
-      contents: history,
+      contents: history.slice(-6),
       config: {
         systemInstruction: systemInstruction
       }
@@ -353,27 +401,122 @@ ${JSON.stringify(bestDocs)}`;
 // Setup multer for in-memory file uploads
 const upload = multer({ storage: multer.memoryStorage() });
 
+// Fetch recent uploads (last 20)
+app.get('/api/kb-recent', (req, res) => {
+  try {
+    const recent = kbData.slice(-20).reverse();
+    res.json(recent);
+  } catch (e) {
+    res.status(500).json({ error: "Failed to fetch history" });
+  }
+});
+
+// Delete an entry from KB and LanceDB
+app.post('/api/kb-delete', async (req, res) => {
+  try {
+    const { url, title } = req.body;
+    if (!url && !title) return res.status(400).json({ error: "Missing identifier" });
+
+    // 1. Remove from kb.json
+    const initialLength = kbData.length;
+    // Remove exact match OR anything starting with "Title [Part"
+    kbData = kbData.filter(doc => {
+      const isExact = (doc.url === url && doc.title === title);
+      const isPart = (doc.url === url && doc.title.startsWith(`${title} [Part `));
+      return !(isExact || isPart);
+    });
+    
+    if (kbData.length === initialLength) {
+      return res.status(404).json({ error: "Entry not found" });
+    }
+
+    fs.writeFileSync(path.resolve('./src/data/kb.json'), JSON.stringify(kbData, null, 2), 'utf-8');
+
+    // 2. Remove from LanceDB
+    const table = await getLanceTable();
+    if (table) {
+      // Delete exact OR prefix match
+      await table.delete(`url = "${url}" AND (title = "${title}" OR title LIKE "${title} [Part %")`);
+    }
+
+    // 3. Rebuild BM25
+    rebuildBM25Engine();
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Delete failed:", error);
+    res.status(500).json({ error: "Delete failed" });
+  }
+});
+
+// AI-powered intelligent chunking (Semantic/Agentic)
+async function getAgenticChunks(text, title) {
+  try {
+    const chunkPrompt = `You are a document processing expert. I have text from "${title}". 
+    Split this into logical, self-contained sections (chunks). 
+    DO NOT summarize; keep original detail. 
+    Aim for 600-1200 characters per chunk. 
+    Return a VALID JSON array of strings: ["chunk1", "chunk2", ...]
+    
+    TEXT:
+    ${text.substring(0, 20000)}`;
+
+    const result = await ai.models.generateContent({
+      model: "gemini-2.5-flash-lite",
+      contents: [{ role: 'user', parts: [{ text: chunkPrompt }] }]
+    });
+    const responseText = (result.text || "").trim();
+    const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+    return jsonMatch ? JSON.parse(jsonMatch[0]) : [text];
+  } catch (e) {
+    console.error("Agentic chunking failed:", e);
+    return [text];
+  }
+}
+
 app.post('/api/update-kb', upload.array('files'), async (req, res) => {
   try {
-    const { type, title, urls } = req.body;
-    
+    const { type, urls } = req.body;
     let newDocs = [];
 
     if (type === 'file' && req.files) {
-      // Process uploaded PDFs
       for (const file of req.files) {
         if (file.mimetype === 'application/pdf') {
-          const pdfData = await pdfParse(file.buffer);
-          newDocs.push({
-            title: title || file.originalname,
-            url: "uploaded-file",
-            category: "Uploaded Document",
-            content: pdfData.text
+          // 1. Use LangChain PDFLoader
+          const blob = new Blob([file.buffer]);
+          const loader = new PDFLoader(blob);
+          const docs = await loader.load();
+          const fullText = docs.map(d => d.pageContent).join('\n');
+
+          // 2. Generate Metadata with AI
+          let generatedTitle = file.originalname;
+          let generatedCategory = "PDF Document";
+          try {
+            const metaPrompt = `Analyze this PDF content and return a JSON object with "title" and "category". 
+            Title: descriptive, Category: one-word (e.g., Shipping, Account, API). 
+            Text: ${fullText.substring(0, 2000)}`;
+            const metaRes = await ai.models.generateContent({
+              model: "gemini-2.5-flash-lite",
+              contents: [{ role: 'user', parts: [{ text: metaPrompt }] }]
+            });
+            const metaJson = JSON.parse((metaRes.text || "").match(/\{[\s\S]*\}/)[0]);
+            generatedTitle = metaJson.title;
+            generatedCategory = metaJson.category;
+          } catch (e) { console.error("AI metadata failed:", e); }
+
+          // 3. Agentic Chunking
+          const chunks = await getAgenticChunks(fullText, generatedTitle);
+          chunks.forEach((chunk, i) => {
+            newDocs.push({
+              title: chunks.length > 1 ? `${generatedTitle} [Part ${i+1}]` : generatedTitle,
+              url: "uploaded-file",
+              category: generatedCategory,
+              content: chunk
+            });
           });
         }
       }
     } else if (type === 'url' && urls) {
-      // Process URLs
       const parsedUrls = JSON.parse(urls);
       for (const url of parsedUrls) {
         try {
@@ -381,21 +524,43 @@ app.post('/api/update-kb', upload.array('files'), async (req, res) => {
           const html = await response.text();
           const $ = cheerio.load(html);
           
-          // Remove scripts and styles
-          $('script, style, noscript, iframe').remove();
-          const textContent = $('body').text().replace(/\s+/g, ' ').trim();
-          const pageTitle = $('title').text() || url;
+          $('script, style, noscript, iframe, header, footer, nav, aside, svg, button, form, .menu, #menu, .mobile-menu, .search-modal, .skip-link, .skip-to-content').remove();
+          $('#header, #footer, .header, .footer, .nav, .navigation, .sidebar, #sidebar, .widgets, .related-posts, .social-share').remove();
           
-          newDocs.push({
-            title: pageTitle,
-            url: url,
-            category: "Web Link",
-            content: textContent
+          const contentSelectors = ['main', 'article', '#content', '.content', '#main', '.main-content', '.post-content', '.entry-content', 'body'];
+          let mainContent = null;
+          for (const selector of contentSelectors) {
+            const found = $(selector);
+            if (found.length > 0) { mainContent = found.first(); break; }
+          }
+          
+          let rawContent = (mainContent || $('body')).text().replace(/\s+/g, ' ').trim();
+          let cleanedContent = rawContent;
+          
+          // AI Clean
+          try {
+            const cleanPrompt = `Extract ONLY the primary informative content from this scraped text. Remove noise. 
+            Keep original detail.
+            TEXT: ${rawContent.substring(0, 10000)}`;
+            const cleanRes = await ai.models.generateContent({
+              model: "gemini-2.5-flash-lite",
+              contents: [{ role: 'user', parts: [{ text: cleanPrompt }] }]
+            });
+            cleanedContent = (cleanRes.text || "").trim();
+          } catch (e) { console.error("AI cleaning failed:", e); }
+
+          const pageTitle = $('title').text() || url;
+          const chunks = await getAgenticChunks(cleanedContent, pageTitle);
+          
+          chunks.forEach((chunk, i) => {
+            newDocs.push({
+              title: chunks.length > 1 ? `${pageTitle} [Part ${i+1}]` : pageTitle,
+              url: url,
+              category: "Web Link",
+              content: chunk
+            });
           });
-        } catch (e) {
-          console.error(`Failed to fetch URL ${url}:`, e);
-          // Still create an entry, but maybe with less content
-        }
+        } catch (e) { console.error(`Failed URL ${url}:`, e); }
       }
     }
 
