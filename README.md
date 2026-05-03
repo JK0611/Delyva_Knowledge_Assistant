@@ -16,6 +16,10 @@ Welcome to the **Delyva FAQ Assistant**, a modern, full-stack application design
 ## What Is Delyva FAQ Assistant?
 Delyva FAQ Assistant is a custom-built support bot utilizing Hybrid Search RAG pipelines for querying and interacting with your support documentation. It leverages Google Gemini for powerful generative capabilities, LanceDB for fast vector search, and BM25 for keyword search, ensuring highly accurate retrieval. The system is split into a robust Express backend to protect your API keys and a responsive React frontend for an optimal user experience.
 
+<div align="center">
+  <img src="./architecture.svg" alt="Delyva FAQ Assistant Architecture" />
+</div>
+
 ---
 
 ## ✨ Features
