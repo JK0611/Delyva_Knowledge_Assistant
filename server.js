@@ -299,14 +299,17 @@ ${docsForRerank}`;
     // ----------------------------------------------------
     // PHASE 4: CONTEXT-INJECTED GENERATION
     // ----------------------------------------------------
-    const contextText = bestDocs.map((d, index) => `Article ${index + 1}:\nTitle: ${d.title}\nURL: ${d.url}\nContent: ${d.content}`).join('\n\n');
+    const contextText = bestDocs.map((d, index) => {
+      const preFormattedLink = d.url && d.url.startsWith('http') ? `[${d.title}](${d.url})` : null;
+      return `Article ${index + 1}:\nTitle: ${d.title}\nURL: ${d.url}\n${preFormattedLink ? `Pre-formatted link: ${preFormattedLink}` : ''}\nContent: ${d.content}`;
+    }).join('\n\n');
 
     const systemInstruction = `
 You are a customer support assistant for DelyvaNow.
 Your task is to help users find answers based ONLY on the provided knowledge base articles.
 
 RULES:
-1. WEB LINKS (Priority): If a relevant article has a real web URL (starting with "http"), do NOT answer the question directly. Instead, provide ONLY the link formatted as: 1. [Article Title](URL)
+1. WEB LINKS (Priority): If a relevant article has a real web URL (starting with "http"), do NOT answer the question directly. Instead, output ONLY the "Pre-formatted link" value from the article EXACTLY as-is. Do NOT modify, rewrite, or remove any part of it. Copy it character for character.
 2. UPLOADED FILES: If the most relevant article has a URL of "uploaded-file", you MUST read the provided content and answer the user's question directly and concisely in text. Do NOT provide the link "uploaded-file".
 3. STRICT RELEVANCE: If the provided articles do not answer the user's specific query, you MUST reply: "I cannot find an article about that. Please contact our live chat team."
 4. DO NOT make up information or URLs outside of the provided context.
