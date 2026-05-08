@@ -4,7 +4,7 @@
 [![Express](https://img.shields.io/badge/Backend-Express-lightgrey?style=flat-square&logo=express)](https://expressjs.com/)
 [![LanceDB](https://img.shields.io/badge/Database-LanceDB-orange?style=flat-square)](https://lancedb.com/)
 
-Welcome to the **Delyva FAQ Assistant**, a modern, full-stack application designed to provide an intelligent Retrieval-Augmented Generation (RAG) chatbot experience. Built with React and Express, it seamlessly integrates with Google's Gemini AI and LanceDB to provide accurate, context-aware answers from your custom knowledge base. In just a few easy steps, you can upload PDFs or web links, process them, and let the bot answer queries based on the provided documents!
+Welcome to the **Delyva FAQ Assistant**, a modern, full-stack application designed to provide an intelligent Retrieval-Augmented Generation (RAG) chatbot experience. Built with React and Express, it seamlessly integrates with Google's Gemini AI, Groq AI and LanceDB to provide accurate, context-aware answers from your custom knowledge base. In just a few easy steps, you can upload PDFs or web links, process them, and let the bot answer queries based on the provided documents!
 
 - [🎯 What Is Delyva FAQ Assistant?](#what-is-delyva-faq-assistant)
 - [✨ Features](#-features)
@@ -43,12 +43,6 @@ Delyva FAQ Assistant is a custom-built support bot utilizing Hybrid Search RAG p
 | Query Rewriting | ✅ | Intelligent rewriting of user queries for optimal search results |
 | Pause Generation | ✅ | Functional pause button to interrupt ongoing bot responses |
 | Observability | ✅ | Full RAG pipeline tracing via Langfuse |
-
-| 🆒 Additional Highlights | Implemented | Description |
-| --- | --- | --- |
-| Admin Interface | ✅ | Secure portal for managing the knowledge base |
-| One-Click Start | ✅ | Run both frontend and backend concurrently via a single script |
-| CI/CD Pipeline | ✅ | Automated GitHub Actions deployment for the frontend |
 
 ---
 
@@ -95,6 +89,3 @@ Once uploaded, the data is stored in the local `kb.json` and LanceDB vector stor
 
 - **Can I stop the bot from generating a long response?**
   Yes, there is a built-in pause/stop functionality on the frontend UI to abort the generation stream.
-
-- **How do I deploy this project?**
-  The `.github/workflows/deploy.yml` automatically builds and deploys the static React frontend to GitHub Pages on every push to `main`. You will need to host your backend `server.js` on a Node.js provider (like Render, Heroku, etc.) and update your frontend's API URL to point to it.
